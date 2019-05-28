@@ -79,11 +79,16 @@ func run() error {
 
 	switch runner.Action {
 	case "create":
+		out, err = runner.Plan()
+		if err != nil {
+			return err
+		}
+
 		out, err = runner.Create()
 		if err != nil {
 			return err
 		}
-		fmt.Print(out)
+		//fmt.Print(out)
 
 		runner.SetExecutionRunStatus("applied")
 		if err != nil {
@@ -95,6 +100,11 @@ func run() error {
 			return err
 		}
 	case "destroy":
+		out, err = runner.PlanDestroy()
+		if err != nil {
+			return err
+		}
+
 		out, err = runner.Destroy()
 		if err != nil {
 			return err

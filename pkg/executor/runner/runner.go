@@ -25,12 +25,14 @@ const (
 Please review the plan and set the annotation 'approved' to 'yes' if approved
 or 'no' if not approved. If set to 'no' the job will exit without making any changes.
 `
+	moduleRoot = "/root/module"
 )
 
 type Runner struct {
 	Action       string
 	Namespace    string
 	ExecutionRun *v1.ExecutionRun
+	Execution    *v1.Execution
 	GitAuth      *git.Auth
 	K8sClient    *kubernetes.Clientset
 	OpClient     *v1.Clients
@@ -61,21 +63,23 @@ func (r *Runner) TerraformInit() (string, error) {
 	return terraform.Init()
 }
 
+// Plan runs the terraform plan for create or update
+// runs of the execution.
+func (r *Runner) Plan() (string, error) {
+	return r.runPlanCommand(false)
+}
+
+// PlanDestroy runs terraform plan with the -destroy
+// flag
+func (r *Runner) PlanDestroy() (string, error) {
+	return r.runPlanCommand(true)
+}
+
 // Create will create resources through terraform. If the execution AutoConfirm flag is
 // set it will run 'plan' then 'apply', if the flag is not set 'plan' will run then
 // the job will wait for the approved annotation to be set then the job will run 'apply' or exit.
 func (r *Runner) Create() (string, error) {
-	out, err := terraform.Plan(false)
-	if err != nil {
-		return "", err
-	}
-
-	fmt.Println(out)
-
-	err = r.SetExecutionRunStatus("planned")
-	if err != nil {
-		return "", err
-	}
+	var err error
 
 	// We have autoConfirm, run apply
 	if r.ExecutionRun.Spec.AutoConfirm {
@@ -109,12 +113,7 @@ func (r *Runner) Create() (string, error) {
 // the job will wait for the approved approved to be set then the job will run 'destroy'
 // or exit
 func (r *Runner) Destroy() (string, error) {
-	out, err := terraform.Plan(true)
-	if err != nil {
-		return "", err
-	}
-
-	fmt.Println(out)
+	var err error
 
 	// We have autoConfirm, run destroy
 	if r.ExecutionRun.Spec.AutoConfirm {
@@ -206,6 +205,13 @@ func (r *Runner) Populate() error {
 		r.GitAuth = &git.Auth{}
 	}
 
+	// Get the Parent Execution
+	ownerName := r.ExecutionRun.OwnerReferences[0].Name
+	r.Execution, err = r.OpClient.Execution.Get(ns, ownerName, metaV1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
 	vSecret, err := r.getSecret(r.ExecutionRun.Spec.SecretName)
 	if err != nil {
 		return err
@@ -258,7 +264,7 @@ func (r *Runner) WriteConfigFile() error {
 		return err
 	}
 
-	err = writer.Write(jsonConfig, "/root/module/config.tf.json")
+	err = writer.Write(jsonConfig, fmt.Sprintf("%s/config.tf.json", moduleRoot))
 	if err != nil {
 		return err
 	}
@@ -271,7 +277,7 @@ func (r *Runner) WriteVarFile() error {
 	if !ok {
 		return fmt.Errorf("no varFile data found in secret %v", r.VarSecret.Name)
 	}
-	err := writer.Write(vars, fmt.Sprintf("/root/module/%v.auto.tfvars", r.ExecutionRun.Name))
+	err := writer.Write(vars, fmt.Sprintf("%s/%v.auto.tfvars", moduleRoot, r.ExecutionRun.Name))
 	if err != nil {
 		return err
 	}
@@ -337,6 +343,20 @@ func (r *Runner) waitForApproval() (string, error) {
 
 		events = watch.ResultChan()
 	}
+}
+
+func (r *Runner) runPlanCommand(destroy bool) (string, error) {
+	out, err := terraform.Plan(destroy)
+	if err != nil {
+		return "", err
+	}
+
+	err = r.SetExecutionRunStatus("planned")
+	if err != nil {
+		return "", err
+	}
+
+	return out, nil
 }
 
 func (r *Runner) getExecutionRun(namespace, name string) (*v1.ExecutionRun, error) {
